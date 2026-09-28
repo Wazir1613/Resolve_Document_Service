@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ﻿# Document Service — Resolve
 
 Task 8 of the Resolve project. Handles document upload, versioning,
@@ -98,3 +99,6 @@ service ships. Nothing else in the codebase needs to change.
 Manual testing via Swagger UI (`/api-docs`) and `curl`/PowerShell for the
 redirect-based download endpoints (Swagger's "Try it out" can't follow
 those due to CORS). No automated test suite yet.
+=======
+# Resolve_Document_Service
+>>>>>>> 85a1220ddaaaebaa4086140d255e5828168a52ad
