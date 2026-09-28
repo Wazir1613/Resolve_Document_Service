@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: document-service-postgres
+    environment:
+      POSTGRES_DB: documentdb
+      POSTGRES_USER: resolve
+      POSTGRES_PASSWORD: resolve123
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  s3:
+    image: chrislusf/seaweedfs
+    container_name: document-service-s3
+    ports:
+      - "8333:8333"
+    command: server -s3 -dir=/data
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      S3_BUCKET: resolve-documents
+    volumes:
+      - s3data:/data
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: document-service-kafka
+    ports:
+      - "9092:9092"
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:9092
+
+volumes:
+  pgdata:
+  s3data:

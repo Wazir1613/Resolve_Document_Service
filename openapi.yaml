@@ -1,0 +1,457 @@
+openapi: 3.0.3
+info:
+  title: Resolve — Document Service
+  description: >
+    Task 8 of Resolve. Covers all four build phases: health check, upload,
+    list, metadata, download, versioning, and the outbox/Kafka relay.
+
+
+    Note: the outbox relay (Phase 4) is a background worker with no REST
+    endpoint of its own. Every successful POST to /documents or
+    /documents/{documentId}/versions writes an outbox row in the same
+    transaction as the database insert; a separate poller then publishes
+    a DocumentUploaded event to the resolve.document.uploaded Kafka topic
+    within a few seconds. This is async and eventually-consistent — a
+    201 response does not guarantee the event has been published yet.
+  version: "0.4.0"
+
+servers:
+  - url: http://localhost:3000
+    description: Local dev
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/cases/{caseId}/documents:
+    post:
+      summary: Upload a document to a case
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Any unique string. Re-sending the same key with the same file
+            returns the original response unchanged; the same key with a
+            different file returns 409.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                description:
+                  type: string
+              required:
+                - file
+      responses:
+        "201":
+          description: Document uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation failed (missing file, file too large, or blocked MIME type)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Missing/invalid auth token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks permission to upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Case not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Idempotency-Key reused with a different request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    get:
+      summary: List documents for a case
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paginated list of documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Document"
+                  page:
+                    type: integer
+                  size:
+                    type: integer
+                  totalElements:
+                    type: integer
+                  totalPages:
+                    type: integer
+        "403":
+          description: Caller may not view documents for this case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/cases/{caseId}/documents/{documentId}:
+    get:
+      summary: Get a single document's metadata
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "403":
+          description: Caller may not view this document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/cases/{caseId}/documents/{documentId}/download:
+    get:
+      summary: Download a document (302 redirect to a presigned URL)
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "302":
+          description: >
+            Redirect to a short-lived presigned download URL. Swagger UI
+            does not follow redirects cleanly — test this one via a
+            browser tab or `curl -L` instead of "Try it out".
+        "403":
+          description: >
+            Caller may not download this document, OR the document's scan
+            status isn't CLEAN yet (only enforced when ENFORCE_SCAN_GATE=true)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/cases/{caseId}/documents/{documentId}/versions:
+    post:
+      summary: Upload a new version of an existing document
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+                - file
+      responses:
+        "201":
+          description: New version uploaded; parent document's currentVersion is bumped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks permission to add a version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Idempotency-Key reused with a different file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    get:
+      summary: List version history for a document
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: List of versions, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentVersion"
+        "403":
+          description: Caller may not view versions for this document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/cases/{caseId}/documents/{documentId}/versions/{versionNumber}/download:
+    get:
+      summary: Download a specific historical version (302 redirect)
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: versionNumber
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "302":
+          description: >
+            Redirect to a short-lived presigned URL for that specific version.
+            Use a browser tab or `curl -L`, not Swagger's "Try it out."
+        "403":
+          description: Caller may not download this version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Document or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Currently stubbed server-side (src/middleware/auth.js) — any value,
+        or no header at all, is accepted until real Authentication exists.
+
+  schemas:
+    Document:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        caseId:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+        checksum:
+          type: string
+          description: SHA-256 hex digest of the file content
+        scanStatus:
+          type: string
+          enum: [PENDING, CLEAN, INFECTED, FAILED]
+        currentVersion:
+          type: integer
+        uploadedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+
+    DocumentVersion:
+      type: object
+      properties:
+        versionNumber:
+          type: integer
+        sizeBytes:
+          type: integer
+        checksum:
+          type: string
+        uploadedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        status:
+          type: integer
+        code:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              code:
+                type: string
+              message:
+                type: string
