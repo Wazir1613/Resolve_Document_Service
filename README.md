@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 ﻿# Document Service — Resolve
 
 Task 8 of the Resolve project. Handles document upload, versioning,
