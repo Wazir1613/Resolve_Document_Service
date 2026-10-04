@@ -1,0 +1,239 @@
+
+
+Integration document service · MD
+# Integration Guide — Document Service
+ 
+**Who this is for:** anyone on the Resolve team connecting their service to
+Document Service, or connecting Document Service to someone else's.
+**What this is not:** a rewrite of the API contract. For exact request/
+response shapes, see `Contracts/Document_Service.md`. This doc explains
+*why* each connection exists and *what to actually do* about it.
+ 
+---
+ 
+## The one-paragraph mental model
+ 
+Think of Document Service as a **hotel concierge who takes packages for
+guests**. Before accepting a package, the concierge needs:
+ 
+- **The front desk** (Authentication) to confirm the person really is a
+  guest, not a stranger off the street.
+- **Security** (RBAC) to confirm this guest is actually allowed to receive
+  packages — maybe some guests have that privilege revoked.
+- **The reservation system** (Case Management) to confirm the room number
+  they gave is real.
+- **The hotel manager's office** (Organization Service) to confirm the
+  whole hotel branch they're staying at hasn't been shut down.
+Once the package is accepted, the concierge doesn't personally deliver it to
+every interested party — they just **announce it on the intercom**
+(Kafka), and whichever departments care (housekeeping, security, the mail
+room) pick it up on their own time.
+ 
+---
+ 
+## Who connects to Document Service, and in which direction
+ 
+| Other service | Direction | Why |
+|---|---|---|
+| **Authentication** (Task 4) | Document Service **depends on it** | Needs to know who's calling and from which tenant |
+| **RBAC** (Task 5) | Document Service **depends on it** | Needs to know if that caller is allowed to upload/read |
+| **Case Management** (Task 6) | Document Service **depends on it** | A document always attaches to a case that has to actually exist |
+| **Organization Service** (Task 2) | Document Service **depends on it** | A suspended tenant shouldn't be able to upload new documents |
+| **Audit, Virus Scanner, OCR Worker, Metadata Processor, Search Indexer** | They **depend on Document Service** | They all react to the `DocumentUploaded` Kafka event, each for their own reason |
+ 
+Document Service is almost entirely a **consumer** of other services for its
+synchronous checks, and a **producer** for everyone downstream via Kafka. It
+never calls Audit, the scanner, or the search indexer directly — it just
+publishes an event and lets them come to it.
+ 
+---
+ 
+## The stub pattern — why integration here is low-risk
+ 
+Every one of Document Service's four upstream dependencies is currently
+answered by a tiny stand-in function that always says "yes." This was
+deliberate, so the service could be built and tested before any of those
+four other services existed. Each stand-in lives in exactly one file:
+ 
+| Dependency | File | Current behavior |
+|---|---|---|
+| Authentication | `src/middleware/auth.js` | Fakes one hardcoded user for every request |
+| RBAC | `src/services/permissionClient.js` | Always returns `true` |
+| Case Management | `src/services/caseClient.js` | Always confirms the case exists |
+| Organization | *not built yet — see below* | No check happens at all |
+ 
+**What this means for integration:** going live with any one of these is an
+edit to one file, not a rewrite of the service. Nothing in the routes,
+controllers, database code, or Kafka logic needs to change.
+ 
+---
+ 
+## Connection 1 — Authentication Service (Task 4)
+ 
+**Plain words:** right now, Document Service treats every single request as
+if it came from the same one made-up person. Going live means actually
+checking who's asking.
+ 
+**What real integration requires** (confirmed from Authentication's real
+contract):
+ 
+1. Fetch Authentication's public signing keys from its JWKS endpoint
+   (`/.well-known/jwks.json`) and verify the token's signature.
+2. Check the token hasn't expired (`exp`) and came from the right issuer
+   (`iss`).
+3. Read `tenantId` and `sub` (the user ID) from the token — **`tenantId` is
+   the confirmed real field name**, not `organization_id`.
+4. **Check Redis** for a revocation marker. A token can look perfectly
+   valid and still have been "returned" (logged out) — like a movie ticket
+   that still looks fine but was already refunded. Skipping this check
+   means a logged-out session keeps working.
+**New things this adds to the service that don't exist today:** a Redis
+connection (new container in `docker-compose.yml`, new client library), and
+a JWKS-fetching library. This is the one connection that's genuinely bigger
+than a one-line swap — budget real time for it.
+ 
+---
+ 
+## Connection 2 — RBAC Service (Task 5)
+ 
+**Plain words:** even if we know *who* someone is, we still need to know if
+they're *allowed* to upload or read documents.
+ 
+**The honest status:** this one can't be fully planned yet. RBAC's own
+documentation is explicit that its real shape — a REST call or a shared
+code library, and what the request/response even looks like — hasn't been
+decided by the team. Document Service is specifically named as one of the
+services blocked by this gap.
+ 
+**What to do in the meantime:** nothing more than what's already there.
+`permissionClient.js`'s one function, `checkPermission(userId, code)`, is
+exactly the shape any future real version will plug into. The permission
+codes already chosen (`DOCUMENT_READ`, `DOCUMENT_UPLOAD`, `DOCUMENT_MANAGE`)
+follow the `{RESOURCE}_{ACTION}` naming RBAC's own docs confirm — so even
+though the mechanism is unknown, the vocabulary is already aligned.
+ 
+**One thing worth flagging to RBAC's owner, before they write the real
+contract:** RBAC sits on "the hot path of nearly every write" per its own
+docs. If every single document upload/read has to make a slow network call
+just to check a permission, that becomes everyone's performance problem, not
+just RBAC's. Worth asking whether some form of short-lived caching is part
+of the plan.
+ 
+---
+ 
+## Connection 3 — Case Management Service (Task 6)
+ 
+**Plain words:** a document always belongs to a case. Before accepting an
+upload, Document Service should check that case is real — otherwise
+anyone could attach a file to a case number that doesn't exist.
+ 
+**The honest status:** Case Management doesn't have a contract document
+yet, so there's no real endpoint to call even if we wanted to. This
+dependency also isn't listed in `tasks.md`'s own "depends on" line for
+Document Service, which is a real gap in the task list itself, not
+something anyone missed.
+ 
+**What to do once Case Management exists:** swap `caseClient.js`'s
+`assertCaseExists()` for a real call, most likely something like:
+```text
+GET /internal/v1/cases/{id} → confirms the case exists and which tenant it belongs to
+```
+Confirm the exact path with Case Management's owner once they write it —
+don't assume the guess above is final.
+ 
+---
+ 
+## Connection 4 — Organization Service (Task 2)
+ 
+**Plain words:** if a whole tenant's account gets suspended, nobody there
+should be able to upload new files, even if their login still technically
+works.
+ 
+**The honest status:** this is the one connection that isn't even stubbed
+yet — not "fake until real," genuinely missing. Worth building the stub
+now, before the real service exists, following the exact same pattern as
+the other three:
+ 
+```javascript
+// src/services/organizationClient.js
+async function assertOrganizationActive(tenantId)
+{
+    return true; // placeholder — replace with a call to
+                 // GET /internal/v1/organizations/{id} once reachable,
+                 // and reject with 403 if status !== "ACTIVE"
+}
+ 
+module.exports = { assertOrganizationActive };
+```
+Call it once per write (upload, new version) — not on reads, matching the
+rule Organization Service's own contract lays out for every other service.
+ 
+---
+ 
+## Connection 5 — Everyone who listens to Document Service's events
+ 
+**Plain words:** once a document uploads successfully, Document Service
+doesn't personally tell the scanner, the search index, or the audit log —
+it writes one event, and whoever's listening grabs it on their own
+schedule.
+ 
+| Who's listening | Why |
+|---|---|
+| **Audit** | Universal subscriber — logs that the upload happened |
+| **Virus Scanner Worker** | Needs to know a new file exists so it can scan it |
+| **OCR Worker** | Pulls text out of the file for search (optional feature) |
+| **Metadata Processor** | Enriches the document record further |
+| **Search Indexer** | Makes the document findable in search |
+ 
+**What Document Service has to keep stable for all of them:** the exact
+shape of the `DocumentUploaded` event — `eventType`, `tenantId`,
+`resourceType`, and the `metadata` block (`documentId`, `caseId`,
+`storageKey`). Changing any of these field names breaks every listener at
+once, so treat this event shape the same way you'd treat a public API
+contract, not an internal implementation detail.
+ 
+**The one event Document Service doesn't produce yet:**
+`DocumentScanned` — published once a real virus scanner reports a result.
+Right now every document sits at `scan_status: PENDING` forever, since
+nothing produces that event. This is correctly out of scope until the
+scanner itself exists — nothing to fix today, just something to remember.
+ 
+---
+ 
+## Quick checklist for whoever picks this up
+ 
+- [ ] Add the missing Organization stub (Connection 4) — the one real gap that isn't even faked yet
+- [ ] Once Authentication is real: add Redis + JWKS verification to `auth.js` (Connection 1 — the biggest single change)
+- [ ] Once RBAC publishes a real contract: swap `permissionClient.js`'s one function (Connection 2)
+- [ ] Once Case Management exists: swap `caseClient.js`'s one function, and confirm the real internal endpoint path (Connection 3)
+- [ ] Never change the `DocumentUploaded` event's field names without checking every downstream consumer first (Connection 5)
+- [ ] Build the virus scanner + `DocumentScanned` event when that becomes a real requirement, not before
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
