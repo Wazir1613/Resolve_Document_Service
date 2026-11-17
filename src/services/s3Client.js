@@ -33,6 +33,25 @@ async function uploadBuffer(storageKey, buffer, mimeType)
     await s3.send(command);
 }
 
+async function downloadBuffer(storageKey)
+{
+    const command = new GetObjectCommand(
+        {
+            Bucket: env.s3Bucket,
+            Key: storageKey
+        });
+
+    const response = await s3.send(command);
+    const chunks = [];
+
+    for await (const chunk of response.Body)
+    {
+        chunks.push(chunk);
+    }
+
+    return Buffer.concat(chunks);
+}
+
 async function getPresignedDownloadUrl(storageKey, filename)
 {
     const command = new GetObjectCommand(
@@ -45,4 +64,4 @@ async function getPresignedDownloadUrl(storageKey, filename)
     return await getSignedUrl(s3, command, { expiresIn: 60 });
 }
 
-module.exports = { uploadBuffer, getPresignedDownloadUrl };
+module.exports = { uploadBuffer, downloadBuffer, getPresignedDownloadUrl };

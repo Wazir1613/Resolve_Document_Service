@@ -24,6 +24,14 @@ services:
     volumes:
       - s3data:/data
 
+  clamav:
+    image: clamav/clamav:stable
+    container_name: document-service-clamav
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamdata:/var/lib/clamav
+
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
     container_name: document-service-kafka
@@ -41,3 +49,4 @@ services:
 volumes:
   pgdata:
   s3data:
+  clamdata:

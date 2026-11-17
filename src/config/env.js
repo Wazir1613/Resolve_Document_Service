@@ -2,27 +2,31 @@ require("dotenv").config();
 
 const env =
     {
-        dbHost: process.env.DB_HOST,
-        dbPort: process.env.DB_PORT,
-        dbName: process.env.DB_NAME,
-        dbUser: process.env.DB_USER,
-        dbPassword: process.env.DB_PASSWORD,
+            dbHost: process.env.DB_HOST,
+            dbPort: process.env.DB_PORT,
+            dbName: process.env.DB_NAME,
+            dbUser: process.env.DB_USER,
+            dbPassword: process.env.DB_PASSWORD,
 
-        s3Endpoint: process.env.S3_ENDPOINT,
-        s3AccessKey: process.env.S3_ACCESS_KEY,
-        s3SecretKey: process.env.S3_SECRET_KEY,
-        s3Bucket: process.env.S3_BUCKET,
-        s3Region: process.env.S3_REGION,
+            s3Endpoint: process.env.S3_ENDPOINT,
+            s3AccessKey: process.env.S3_ACCESS_KEY,
+            s3SecretKey: process.env.S3_SECRET_KEY,
+            s3Bucket: process.env.S3_BUCKET,
+            s3Region: process.env.S3_REGION,
 
-        enforceScanGate: process.env.ENFORCE_SCAN_GATE === "true",
+            enforceScanGate: process.env.ENFORCE_SCAN_GATE === "true",
 
-        maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES),
-        blockedMimeTypes: (process.env.BLOCKED_MIME_TYPES || "").split(",").filter(Boolean),
+            maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES),
+            blockedMimeTypes: (process.env.BLOCKED_MIME_TYPES || "").split(",").filter(Boolean),
 
-        kafkaBrokers: (process.env.KAFKA_BROKERS || "").split(","),
-        kafkaTopic: process.env.KAFKA_TOPIC,
-        kafkaClientId: process.env.KAFKA_CLIENT_ID,
-        outboxPollIntervalMs: Number(process.env.OUTBOX_POLL_INTERVAL_MS)
+            kafkaBrokers: (process.env.KAFKA_BROKERS || "").split(","),
+            kafkaTopic: process.env.KAFKA_TOPIC,
+            kafkaClientId: process.env.KAFKA_CLIENT_ID,
+            outboxPollIntervalMs: Number(process.env.OUTBOX_POLL_INTERVAL_MS),
+
+            clamavHost: process.env.CLAMAV_HOST || "localhost",
+            clamavPort: Number(process.env.CLAMAV_PORT || 3310),
+            scanPollIntervalMs: Number(process.env.SCAN_POLL_INTERVAL_MS || 5000)
     };
 
 module.exports = env;
